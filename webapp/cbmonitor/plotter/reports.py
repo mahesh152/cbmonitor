@@ -1,7 +1,7 @@
 from collections import OrderedDict, defaultdict, namedtuple
 
-from cbmonitor import models
-
+#from cbmonitor import models
+from cbmonitor import n1ql_handler
 
 Observable = namedtuple(
     "Observable", ["cluster", "server", "bucket", "index", "name", "collector"]
@@ -372,25 +372,19 @@ class Report(object):
         self.servers = ()
         self.indexes = ()
         for snapshot in snapshots:
-            buckets = {
-                b.name for b in models.Bucket.objects.filter(cluster=snapshot.cluster)
-            }
+            buckets = set(n1ql_handler.get_buckets(snapshot["cluster"]))
             if self.buckets == ():
                 self.buckets = buckets
             else:
                 self.buckets = buckets & self.buckets
 
-            indexes = {
-                i.name for i in models.Index.objects.filter(cluster=snapshot.cluster)
-            }
+            indexes = set(n1ql_handler.get_indexes(snapshot["cluster"]))
             if self.indexes == ():
                 self.indexes = indexes
             else:
                 self.indexes = indexes & self.indexes
 
-            servers = {
-                s.address for s in models.Server.objects.filter(cluster=snapshot.cluster)
-            }
+            servers = set(n1ql_handler.get_servers(snapshot["cluster"]))
             if self.servers == ():
                 self.servers = servers
             else:
@@ -418,57 +412,38 @@ class Report(object):
         for snapshot in self.snapshots:
             # Cluster-wide metrics
             observables = defaultdict(dict)
-            for o in models.Observable.objects.filter(cluster=snapshot.cluster,
-                                                      bucket__isnull=True,
-                                                      server__isnull=True,
-                                                      index__isnull=True):
-
-                observables[o.collector][o.name] = Observable(
-                    snapshot.cluster.name, "", "", "", o.name, o.collector
+            for o in n1ql_handler.get_clusters_all(snapshot["cluster"]):
+                observables[o["collector"]][o["name"]] = Observable(
+                    snapshot["cluster"], "", "", "", o["name"], o["collector"]
                 )
-            all_observables[""][snapshot.cluster] = observables
+            all_observables[""][snapshot["cluster"]] = observables
 
             # Per-bucket metrics
             for bucket in self.buckets:
-                _bucket = models.Bucket.objects.get(cluster=snapshot.cluster,
-                                                    name=bucket)
                 observables = defaultdict(dict)
-                for o in models.Observable.objects.filter(cluster=snapshot.cluster,
-                                                          bucket=_bucket,
-                                                          server__isnull=True,
-                                                          index__isnull=True):
-                    observables[o.collector][o.name] = Observable(
-                        snapshot.cluster.name, "", bucket, "", o.name, o.collector
+                for o in n1ql_handler.get_buckets_all(snapshot["cluster"], bucket):
+                    observables[o["collector"]][o["name"]] = Observable(
+                        snapshot["cluster"], "", bucket, "", o["name"], o["collector"]
                     )
-                all_observables[bucket][snapshot.cluster] = observables
+                all_observables[bucket][snapshot["cluster"]] = observables
 
             # Per-index metrics
             for index in self.indexes:
-                _index = models.Index.objects.get(cluster=snapshot.cluster,
-                                                  name=index)
                 observables = defaultdict(dict)
-                for o in models.Observable.objects.filter(cluster=snapshot.cluster,
-                                                          bucket__isnull=True,
-                                                          server__isnull=True,
-                                                          index=_index):
-                    observables[o.collector][o.name] = Observable(
-                        snapshot.cluster.name, "", "", index, o.name, o.collector
+                for o in n1ql_handler.get_indexes_all(snapshot["cluster"], index):
+                    observables[o["collector"]][o["name"]] = Observable(
+                        snapshot["cluster"], "", "", index, o["name"], o["collector"]
                     )
-                all_observables[index][snapshot.cluster] = observables
+                all_observables[index][snapshot["cluster"]] = observables
 
             # Per-server metrics
             for server in self.servers:
-                _server = models.Server.objects.get(cluster=snapshot.cluster,
-                                                    address=server)
                 observables = defaultdict(dict)
-                for o in models.Observable.objects.filter(cluster=snapshot.cluster,
-                                                          bucket__isnull=True,
-                                                          server=_server,
-                                                          index__isnull=True):
-                    observables[o.collector][o.name] = Observable(
-                        snapshot.cluster.name, server, "", "", o.name, o.collector
+                for o in n1ql_handler.get_servers_all(snapshot["cluster"], index):
+                    observables[o["collector"]][o["name"]] = Observable(
+                        snapshot["cluster"], server, "", "", o["name"], o["collector"]
                     )
-                all_observables[server][snapshot.cluster] = observables
+                all_observables[server][snapshot["cluster"]] = observables
         return all_observables
 
     def get_report(self):
@@ -491,7 +466,7 @@ class Report(object):
                              ):
                 for metric in metrics:
                     observables.append([
-                        all_observables[""][snapshot.cluster][collector].get(metric)
+                        all_observables[""][snapshot["cluster"]][collector].get(metric)
                         for snapshot in self.snapshots
                     ])
             # Per-server metrics
@@ -506,7 +481,7 @@ class Report(object):
                 for metric in metrics:
                     for server in self.servers:
                         observables.append([
-                            all_observables[server][snapshot.cluster][collector].get(metric)
+                            all_observables[server][snapshot["cluster"]][collector].get(metric)
                             for snapshot in self.snapshots
                         ])
             # Per-bucket metrics
@@ -524,7 +499,7 @@ class Report(object):
                 for metric in metrics:
                     for bucket in self.buckets:
                         observables.append([
-                            all_observables[bucket][snapshot.cluster][collector].get(metric)
+                            all_observables[bucket][snapshot["cluster"]][collector].get(metric)
                             for snapshot in self.snapshots
                         ])
             # Per-index metrics
@@ -534,7 +509,7 @@ class Report(object):
                 for metric in metrics:
                     for index in self.indexes:
                         observables.append([
-                            all_observables[index][snapshot.cluster][collector].get(metric)
+                            all_observables[index][snapshot["cluster"]][collector].get(metric)
                             for snapshot in self.snapshots
                         ])
         # Skip full mismatch and return tuple with Observable objects

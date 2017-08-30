@@ -6,3 +6,4 @@ pandas==0.20.2
 flake8==3.3.0
 python-memcached==1.58
 requests==2.18.3
+couchbase==2.2.2

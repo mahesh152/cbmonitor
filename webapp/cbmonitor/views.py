@@ -1,15 +1,15 @@
 import json
 import logging
 
+from cbmonitor.plotter import Plotter
+
+from cbmonitor import n1ql_handler
+
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.utils import IntegrityError
 from django.http import HttpResponse, Http404
 from django.shortcuts import render_to_response
 from django.views.decorators.cache import cache_page
-
-from cbmonitor import forms
-from cbmonitor import models
-from cbmonitor.plotter import Plotter
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +38,12 @@ def html_report(request):
 def parse_snapshots(request):
     snapshots = []
     for snapshot in request.GET.getlist("snapshot"):
-        snapshot = models.Snapshot.objects.get(name=snapshot)
+        snapshot = n1ql_handler.get_snapshot(snapshot)
         snapshots.append(snapshot)
     return snapshots
 
 
 class ValidationError(Exception):
-
     def __init__(self, form):
         self.error = {item[0]: item[1][0] for item in form.errors.items()}
 
@@ -67,142 +66,87 @@ def validation(method):
             return HttpResponse(content=error, status=400)
         else:
             return response or HttpResponse(content="Success")
+
     return wrapper
 
 
 @validation
 def add_cluster(request):
-    form = forms.AddClusterForm(request.POST)
-    if form.is_valid():
-        form.save()
-    else:
-        raise ValidationError(form)
+    n1ql_handler.add_cluster(request.POST['name'])
 
 
 @validation
 def add_server(request):
-    form = forms.AddServerForm(request.POST)
-    if form.is_valid():
-        form.save()
-    else:
-        raise ValidationError(form)
+    n1ql_handler.add_server(request.POST['address'], request.POST['cluster'])
 
 
 @validation
 def add_bucket(request):
-    form = forms.AddBucketForm(request.POST)
-    if form.is_valid():
-        form.save()
-    else:
-        raise ValidationError(form)
+    n1ql_handler.add_bucket(request.POST['name'], request.POST['cluster'])
 
 
 @validation
 def add_index(request):
-    form = forms.AddIndexForm(request.POST)
-    if form.is_valid():
-        form.save()
-    else:
-        raise ValidationError(form)
+    n1ql_handler.add_index(request.POST['name'], request.POST['cluster'])
 
 
 def get_clusters(request):
-    clusters = [c.name for c in models.Cluster.objects.all()]
+    clusters = n1ql_handler.get_clusters()
     content = json.dumps(sorted(clusters))
     return HttpResponse(content)
 
 
 @validation
 def get_servers(request):
-    form = forms.GetServersForm(request.GET)
-    if form.is_valid():
-        try:
-            cluster = models.Cluster.objects.get(name=request.GET["cluster"])
-            servers = models.Server.objects.filter(cluster=cluster).values()
-            servers = [s["address"] for s in servers]
-        except ObjectDoesNotExist:
-            servers = []
-    else:
-        servers = []
+    servers = n1ql_handler.get_servers(request.GET["cluster"])
     content = json.dumps(sorted(servers))
     return HttpResponse(content)
 
 
 @validation
 def get_buckets(request):
-    form = forms.GetBucketsForm(request.GET)
-    if form.is_valid():
-        try:
-            cluster = models.Cluster.objects.get(name=request.GET["cluster"])
-            buckets = models.Bucket.objects.filter(cluster=cluster).values()
-            buckets = [b["name"] for b in buckets]
-        except ObjectDoesNotExist:
-            buckets = []
-    else:
-        buckets = []
+    buckets = n1ql_handler.get_buckets(request.GET["cluster"])
     content = json.dumps(sorted(buckets))
     return HttpResponse(content)
 
 
 @validation
 def get_indexes(request):
-    form = forms.GetIndexForm(request.GET)
-    if form.is_valid():
-        try:
-            cluster = models.Cluster.objects.get(name=request.GET["cluster"])
-            indexes = models.Index.objects.filter(cluster=cluster).values()
-            indexes = [i["name"] for i in indexes]
-        except ObjectDoesNotExist:
-            indexes = []
-    else:
-        indexes = []
+    indexes = n1ql_handler.get_indexes(request.GET["cluster"])
     content = json.dumps(sorted(indexes))
     return HttpResponse(content)
 
 
 @validation
-def get_metrics(request):
-    form = forms.GetMetrics(request.GET)
+def add_metric(request):
+    bucket = request.POST["bucket"] if "bucket" in request.POST else None
+    index = request.POST["index"] if "index" in request.POST else None
+    server = request.POST["server"] if "server" in request.POST else None
+    n1ql_handler.add_metric(cluster=request.POST["cluster"], bucket=bucket,
+                            index=index, server=server,
+                            collector=request.POST["collector"], name=request.POST["name"])
 
-    if form.is_valid():
-        try:
-            observables = models.Observable.objects.filter(**form.params).values()
-            observables = [{"name": o["name"], "collector": o["collector"]}
-                           for o in observables]
-        except ObjectDoesNotExist:
-            observables = []
-    else:
-        observables = []
-    content = json.dumps(sorted(observables))
+
+@validation
+def get_metrics(request):
+    bucket = request.GET["bucket"] if "bucket" in request.GET else None
+    index = request.GET["index"] if "index" in request.GET else None
+    server = request.GET["server"] if "server" in request.GET else None
+    collector = request.GET["collector"] if "collector" in request.GET else None
+    metrics = n1ql_handler.get_metrics(cluster=request.GET["cluster"], bucket=bucket,
+                                       index=index, server=server,
+                                       collector=collector)
+    content = json.dumps(sorted(metrics))
     return HttpResponse(content)
 
 
 @validation
-def add_metric(request):
-    form = forms.AddMetric(request.POST)
-    if form.is_valid():
-        observable = form.save(commit=False)
-        observable.bucket = form.cleaned_data["bucket"]
-        observable.index = form.cleaned_data["index"]
-        observable.server = form.cleaned_data["server"]
-        observable.save()
-    else:
-        raise ValidationError(form)
-
-
-@validation
 def add_snapshot(request):
-    form = forms.AddSnapshot(request.POST)
-    if form.is_valid():
-        form.save()
-    else:
-        raise ValidationError(form)
+    n1ql_handler.add_snapshot(request.POST['name'], request.POST['cluster'])
 
 
 def get_snapshots(request):
-    cluster = request.GET["cluster"]
-    snapshots = models.Snapshot.objects.filter(cluster=cluster).values()
-    snapshots = [snapshot["name"] for snapshot in snapshots]
+    snapshots = n1ql_handler.get_snapshots(request.GET["cluster"])
     snapshots.insert(0, "all_data")
     content = json.dumps(snapshots)
     return HttpResponse(content)
